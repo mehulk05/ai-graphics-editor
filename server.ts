@@ -187,6 +187,198 @@ Generate the updated or new design template and write a message summarizing the 
 });
 
 // -------------------------------------------------------------------
+// API ENDPOINT: /api/design/vectorize
+// Analyzes an uploaded image using Gemini 3.5 Flash and decomposes/recreates it
+// as structured, completely editable vector layers (text, shapes, images).
+// -------------------------------------------------------------------
+app.post("/api/design/vectorize", async (req, res) => {
+  try {
+    const { base64Image, mimeType = "image/png" } = req.body;
+    if (!base64Image) {
+      return res.status(400).json({ error: "Base64 source image is required." });
+    }
+
+    const ai = getGenAI();
+    console.log(`Vectorizing uploaded image of mimeType ${mimeType} into editable canvas template...`);
+
+    // Clean base64 string
+    const cleanB64 = base64Image.replace(/^data:image\/\w+;base64,/, "");
+
+    const systemPrompt = `You are a world-class professional Design Engineering Agent. Your goal is to analyze an uploaded image and recreate it as a high-fidelity, clean vector template using our structured canvas model.
+
+Your response must be a JSON object containing a brief nice "message" explaining the design decomposition and the compiled "template" object.
+
+The designs are built inside an 800x800 pixel canvas. Coordinate system:
+- width: 800, height: 800 (always return 800 for width and height).
+- Position (x, y) coordinates represent the CENTER of each layer. E.g., x:400, y:400 is the exact center of the canvas.
+- Keep layers ordered correctly using sequential \`zIndex\` starting from 1 (background is base, then cards/shapes, then images, then texts and badges on top).
+
+ELEMENT TYPES & ATTRIBUTES:
+1. Background:
+   - Can be 'color' (solid color like #D0E0E5), 'gradient' (vibrant, rich linear gradient), or 'image' (if there is a full-screen photographic background, you can use a high-quality Unsplash image URL).
+2. Text Layers:
+   - Identify all prominent texts in the image.
+   - Map each logical line/phrase of text to its own individual TextLayer, preserving the hierarchy (e.g., headers, subheaders, body, details).
+   - properties:
+     * id: unique string (e.g., text_1)
+     * text: the actual string (e.g., "SPRING BREAK BOTOX SPECIAL")
+     * x, y: position of the box center (must be 0-800 context)
+     * width, height: dimension of the text box (logical width e.g. 500)
+     * color: color of the text (Hex value matching the original color, e.g., "#1E3A5F")
+     * fontFamily: select the closest matching font: "Inter" (clean sans), "Space Grotesk" (bold tech header), "Playfair Display" (elegant serif), or "JetBrains Mono" (tech/monospace)
+     * fontSize: size in pixels (e.g., range 12 to 80)
+     * fontWeight: "bold", "normal", "semibold", "900", "300"
+     * align: "left", "center", "right"
+     * opacity: 1
+     * rotation: 0
+     * zIndex: a high number so text stays on top
+3. Shape Layers:
+   - Look for card containers, buttons, colored backgrounds/panels, borders.
+   - For example, if there is a dark slate-teal block at the bottom, draft a Rectangle shape with fill matching that dark slate-teal color.
+   - properties:
+     * id: unique string
+     * type: "shape"
+     * shapeType: "rect" or "circle" or "triangle"
+     * x, y, width, height (must be 0-800 context)
+     * fill: color (Hex)
+     * stroke: border color (Hex)
+     * strokeWidth: size in px
+     * borderRadius: rounding value (e.g., 20)
+     * opacity: 1, rotation: 0
+     * zIndex: logical stacking order below texts but above backgrounds
+4. Image Layers:
+   - If there are photos (like the face before/after photos), represent them with high-quality, professional Unsplash image URLs of relevant subjects, or use beautiful thematic placeholders.
+   - You can use Unsplash search query URLs based on the subject matter, for example:
+     "https://images.unsplash.com/photo-1512290923902-8a9f81dc236c?w=400&q=80" for beauty/skincare.
+     Select high-quality aesthetic URLs.
+   - properties:
+     * id: unique string
+     * type: "image"
+     * src: Unsplash image URL or standard placeholder URL
+     * x, y, width, height (must be 0-800 context)
+     * opacity: 1
+     * rotation: 0
+     * blur: 0
+     * cornerRadius: 12
+     * zIndex: logical stacking order
+
+Make sure to extract ALL key text phrases as editable text layers. Recreate section blocks, backdrop cards, and buttons as Shape layers, so the user can easily click, edit text, change button/background colors (e.g., blue to red), reposition elements, and save. Generate a beautiful recreation.`;
+
+    const imagePart = {
+      inlineData: {
+        mimeType: mimeType,
+        data: cleanB64,
+      },
+    };
+
+    const textPart = {
+      text: "Analyze the uploaded photograph or image. Extract all typography, text elements, shape panels, colors, and embedded figures. Reconstruct them into the specified JSON editable model on an 800x800 canvas so we can recreate it beautifully.",
+    };
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: [imagePart, textPart],
+      config: {
+        systemInstruction: systemPrompt,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            message: {
+              type: Type.STRING,
+              description: "A summary of how the original image was parsed and decomposed into vector coordinates.",
+            },
+            template: {
+              type: Type.OBJECT,
+              description: "The complete reconstructed design template representing the uploaded image draft.",
+              properties: {
+                width: { type: Type.INTEGER },
+                height: { type: Type.INTEGER },
+                background: {
+                  type: Type.OBJECT,
+                  properties: {
+                    type: { type: Type.STRING }, // 'color' | 'gradient' | 'image'
+                    color: { type: Type.STRING },
+                    gradient: {
+                      type: Type.OBJECT,
+                      properties: {
+                        from: { type: Type.STRING },
+                        to: { type: Type.STRING },
+                        angle: { type: Type.INTEGER },
+                      },
+                      required: ["from", "to", "angle"],
+                    },
+                    imageUrl: { type: Type.STRING },
+                  },
+                  required: ["type", "color"],
+                },
+                layers: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      id: { type: Type.STRING },
+                      type: { type: Type.STRING }, // 'text' | 'shape' | 'badge' | 'image'
+                      x: { type: Type.INTEGER },
+                      y: { type: Type.INTEGER },
+                      width: { type: Type.INTEGER },
+                      height: { type: Type.INTEGER },
+                      opacity: { type: Type.NUMBER },
+                      rotation: { type: Type.INTEGER },
+                      zIndex: { type: Type.INTEGER },
+                      // Text layer elements
+                      text: { type: Type.STRING },
+                      fontFamily: { type: Type.STRING },
+                      fontSize: { type: Type.INTEGER },
+                      color: { type: Type.STRING },
+                      fontWeight: { type: Type.STRING },
+                      fontStyle: { type: Type.STRING },
+                      align: { type: Type.STRING },
+                      letterSpacing: { type: Type.INTEGER },
+                      // Shape layer elements
+                      shapeType: { type: Type.STRING }, // 'rect' | 'circle' | 'triangle'
+                      fill: { type: Type.STRING },
+                      stroke: { type: Type.STRING },
+                      strokeWidth: { type: Type.INTEGER },
+                      borderRadius: { type: Type.INTEGER },
+                      // Badge layer elements
+                      badgeStyle: { type: Type.STRING },
+                      textColor: { type: Type.STRING },
+                      // Image layer elements
+                      src: { type: Type.STRING },
+                      blur: { type: Type.INTEGER },
+                      cornerRadius: { type: Type.INTEGER },
+                    },
+                    required: ["id", "type", "x", "y", "width", "height", "opacity", "rotation", "zIndex"],
+                  },
+                },
+              },
+              required: ["width", "height", "background", "layers"],
+            },
+          },
+          required: ["message", "template"],
+        },
+      },
+    });
+
+    const responseText = response.text;
+    if (!responseText) {
+      throw new Error("Empty response received from Gemini.");
+    }
+
+    const parseResult = JSON.parse(responseText);
+    res.json(parseResult);
+  } catch (error: any) {
+    console.error("Vectorization API error:", error);
+    res.status(500).json({
+      error: "Failed to vectorize image",
+      details: error.message || error,
+      message: "I encountered an error trying to analyze and recreate that image. Please ensure it's a valid graphic or try a smaller image file!"
+    });
+  }
+});
+
+// -------------------------------------------------------------------
 // API ENDPOINT: /api/image/generate
 // Uses Gemini 2.5 Flash Image to generate stunning visual base images at runtime.
 // -------------------------------------------------------------------
