@@ -1,0 +1,6 @@
+{
+  "name": "AI Graphic Designer & Canvas Editor",
+  "description": "An interactive Canva-like canvas editor and ChatGPT-style design assistant. Generate vector and raster layers from prompt, enhance templates with AI, and export designs directly.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
